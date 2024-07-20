@@ -5,6 +5,7 @@ import json
 import pycorrector
 from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget  
 from PyQt5.QtCore import QThread, pyqtSignal  
+import chardet
 
 try:
     import numpy as np
@@ -41,71 +42,54 @@ except ImportError:
     sys.exit(-1)
 
 import sys  
-from PyQt5.QtWidgets import QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget  
-from PyQt5.QtCore import Qt  
-from PyQt5.QtWidgets import QApplication, QWidget  
-from PyQt5.QtCore import Qt, QRect  
-from PyQt5.QtGui import QScreen  
-from PyQt5.QtGui import QFont
-from PyQt5.QtGui import QColor, QPalette  
-  
-class TransparentWindow(QMainWindow):  
-    def __init__(self):  
-        super().__init__()  
-        self.setWindowTitle('半透明窗口带文本显示')  
-        self.setGeometry(100, 100, 1900, 400)  
-          
+# -*- coding:utf-8 -*-
+import sys
 
-        # 设置窗口置顶  
-        self.setWindowFlags(Qt.WindowStaysOnTopHint)  
-  
-        # 获取屏幕尺寸  
-        screen = QScreen.grabWindow(QApplication.primaryScreen(), QApplication.desktop().winId())  
-        screen_size = screen.size()  
+from PyQt5.QtCore import QSize
+from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import Qt, pyqtSignal, QPoint
+from PyQt5.QtGui import QFont, QEnterEvent, QPainter, QColor, QPen
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel,QSpacerItem, QSizePolicy, QPushButton
+from PyQt5.QtGui import QIcon
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QPushButton, QTextEdit,QTextBrowser,QSplitter
+import math
+from titleBar import TitleBar
 
-        # 调整窗口位置到屏幕正中最下方  
-        # 注意：这里我们假设窗口的高度是固定的（如100px），然后计算顶部位置  
-        # 顶部位置 = 屏幕高度 - 窗口高度  
-        screen_height = screen_size.height()  
-        window_height = self.height()  
-        self.move(screen_size.width() // 2 - self.width() // 2, screen_height - window_height)  
+# 枚举左上右下以及四个定点
+Left, Top, Right, Bottom, LeftTop, RightTop, LeftBottom, RightBottom = range(8)
 
-        # 移除边框  
-        self.setWindowFlags(Qt.FramelessWindowHint)  
-        # 设置窗口背景半透明（注意：在某些平台上可能不完全有效）  
-        self.setAttribute(Qt.WA_TranslucentBackground)  
-          
-        # 创建一个中心小部件用于布局  
-        central_widget = QWidget(self)  
-        self.setCentralWidget(central_widget)  
-          
-        # 创建一个垂直布局  
-        layout = QVBoxLayout(central_widget)  
-          
-        # 创建一个文本标签控件  
-        self.text_label = QLabel(central_widget)  
-        self.text_label.setText("这里是初始文本内容。")  
-        # 创建一个QFont对象并设置其属性  
-        font = QFont()  
-        font.setFamily("霞鹜文楷 CN Bold")  # 设置字体家族  
-        font.setPointSize(30)    # 设置字体大小
-        
-        # 将配置好的QFont对象应用到QLabel上  
-        self.text_label.setFont(font)  
+class DesktopWidget(QWidget):
 
-        # 创建一个调色板  
-        palette = self.text_label.palette()  
+    # 四周边距
+    Margins = 5
 
-        # 设置文本颜色（WindowText是文本颜色的角色）  
-        palette.setColor(QPalette.WindowText, QColor(250, 249, 222))  
+    def __init__(self, *args, **kwargs):
+        super(DesktopWidget, self).__init__(*args, **kwargs)
+        self._pressed = False
+        self.Direction = None
+        # 背景透明
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        # 无边框
+        self.setWindowFlags(Qt.FramelessWindowHint|Qt.Tool|Qt.WindowStaysOnTopHint)  # 隐藏边框
+        # 鼠标跟踪
+        self.setMouseTracking(True)
+        # 布局
+        layout = QVBoxLayout(self, spacing=0)
+        # 预留边界用于实现无边框窗口调整大小
+        layout.setContentsMargins(
+            self.Margins, self.Margins, self.Margins, self.Margins)
+        # 标题栏
+        self.titleBar = TitleBar(self)
+        layout.addWidget(self.titleBar)
+        # 信号槽
+        self.titleBar.windowMinimumed.connect(self.showMinimized)
+        self.titleBar.windowMaximumed.connect(self.showMaximized)
+        self.titleBar.windowNormaled.connect(self.showNormal)
+        self.titleBar.windowClosed.connect(self.close)
+        self.titleBar.windowMoved.connect(self.move)
+        self.windowTitleChanged.connect(self.titleBar.setTitle)
+        self.windowIconChanged.connect(self.titleBar.setIcon)
 
-        # 将调色板应用到标签上  
-        self.text_label.setPalette(palette)  
-        self.text_label.setAlignment(Qt.AlignCenter)  
-          
-        # 将文本标签控件添加到布局中  
-        layout.addWidget(self.text_label)  
-          
         self.worker = Worker()  
         self.worker.finished.connect(self.onTaskFinished) 
 
@@ -116,6 +100,257 @@ class TransparentWindow(QMainWindow):
   
     def onTaskFinished(self):  
         print("任务完成！")  
+
+    def setTitleBarHeight(self, height=38):
+        """设置标题栏高度"""
+        self.titleBar.setHeight(height)
+
+    def setIconSize(self, size):
+        """设置图标的大小"""
+        self.titleBar.setIconSize(size)
+
+    def setWidget(self, widget):
+        """设置自己的控件"""
+        if hasattr(self, '_widget'):
+            return
+        self._widget = widget
+        # 设置默认背景颜色,否则由于受到父窗口的影响导致透明
+        self._widget.setAutoFillBackground(True)
+        palette = self._widget.palette()
+        palette.setColor(palette.Window, QColor(240, 240, 240))
+        self._widget.setPalette(palette)
+        # self._widget.installEventFilter(self)
+        self.layout().addWidget(self._widget)
+
+    def move(self, pos):
+        if self.windowState() == Qt.WindowMaximized or self.windowState() == Qt.WindowFullScreen:
+            # 最大化或者全屏则不允许移动
+            return
+        super(DesktopWidget, self).move(pos)
+
+    def showMaximized(self):
+        """最大化,要去除上下左右边界,如果不去除则边框地方会有空隙"""
+        super(DesktopWidget, self).showMaximized()
+        self.layout().setContentsMargins(0, 0, 0, 0)
+
+    def showNormal(self):
+        """还原,要保留上下左右边界,否则没有边框无法调整"""
+        super(DesktopWidget, self).showNormal()
+        self.layout().setContentsMargins(
+            self.Margins, self.Margins, self.Margins, self.Margins)
+
+    def eventFilter(self, obj, event):
+        """事件过滤器,用于解决鼠标进入其它控件后还原为标准鼠标样式"""
+        if isinstance(event, QEnterEvent):
+            self.setCursor(Qt.ArrowCursor)
+        return super(DesktopWidget, self).eventFilter(obj, event)
+
+    def paintEvent(self, event):
+        """由于是全透明背景窗口,重绘事件中绘制透明度为1的难以发现的边框,用于调整窗口大小"""
+        super(DesktopWidget, self).paintEvent(event)
+        painter = QPainter(self)
+        painter.setPen(QPen(QColor(255, 255, 255, 1), 2 * self.Margins))
+        painter.drawRect(self.rect())
+
+    def mousePressEvent(self, event):
+        """鼠标点击事件"""
+        super(DesktopWidget, self).mousePressEvent(event)
+        if event.button() == Qt.LeftButton:
+            self._mpos = event.pos()
+            self._pressed = True
+
+    def mouseReleaseEvent(self, event):
+        '''鼠标弹起事件'''
+        super(DesktopWidget, self).mouseReleaseEvent(event)
+        self._pressed = False
+        self.Direction = None
+
+    def mouseMoveEvent(self, event):
+        """鼠标移动事件"""
+        super(DesktopWidget, self).mouseMoveEvent(event)
+        pos = event.pos()
+        xPos, yPos = pos.x(), pos.y()
+        wm, hm = self.width() - self.Margins, self.height() - self.Margins
+        if self.isMaximized() or self.isFullScreen():
+            self.Direction = None
+            self.setCursor(Qt.ArrowCursor)
+            return
+        if event.buttons() == Qt.LeftButton and self._pressed:
+            self._resizeWidget(pos)
+            return
+        if xPos <= self.Margins and yPos <= self.Margins:
+            # 左上角
+            self.Direction = LeftTop
+            self.setCursor(Qt.SizeFDiagCursor)
+        elif wm <= xPos <= self.width() and hm <= yPos <= self.height():
+            # 右下角
+            self.Direction = RightBottom
+            self.setCursor(Qt.SizeFDiagCursor)
+        elif wm <= xPos and yPos <= self.Margins:
+            # 右上角
+            self.Direction = RightTop
+            self.setCursor(Qt.SizeBDiagCursor)
+        elif xPos <= self.Margins and hm <= yPos:
+            # 左下角
+            self.Direction = LeftBottom
+            self.setCursor(Qt.SizeBDiagCursor)
+        elif 0 <= xPos <= self.Margins and self.Margins <= yPos <= hm:
+            # 左边
+            self.Direction = Left
+            self.setCursor(Qt.SizeHorCursor)
+        elif wm <= xPos <= self.width() and self.Margins <= yPos <= hm:
+            # 右边
+            self.Direction = Right
+            self.setCursor(Qt.SizeHorCursor)
+        elif self.Margins <= xPos <= wm and 0 <= yPos <= self.Margins:
+            # 上面
+            self.Direction = Top
+            self.setCursor(Qt.SizeVerCursor)
+        elif self.Margins <= xPos <= wm and hm <= yPos <= self.height():
+            # 下面
+            self.Direction = Bottom
+            self.setCursor(Qt.SizeVerCursor)
+
+    def _resizeWidget(self, pos):
+        """调整窗口大小"""
+        if self.Direction == None:
+            return
+        mpos = pos - self._mpos
+        xPos, yPos = mpos.x(), mpos.y()
+        geometry = self.geometry()
+        x, y, w, h = geometry.x(), geometry.y(), geometry.width(), geometry.height()
+        if self.Direction == LeftTop:  # 左上角
+            if w - xPos > self.minimumWidth():
+                x += xPos
+                w -= xPos
+            if h - yPos > self.minimumHeight():
+                y += yPos
+                h -= yPos
+        elif self.Direction == RightBottom:  # 右下角
+            if w + xPos > self.minimumWidth():
+                w += xPos
+                self._mpos = pos
+            if h + yPos > self.minimumHeight():
+                h += yPos
+                self._mpos = pos
+        elif self.Direction == RightTop:  # 右上角
+            if h - yPos > self.minimumHeight():
+                y += yPos
+                h -= yPos
+            if w + xPos > self.minimumWidth():
+                w += xPos
+                self._mpos.setX(pos.x())
+        elif self.Direction == LeftBottom:  # 左下角
+            if w - xPos > self.minimumWidth():
+                x += xPos
+                w -= xPos
+            if h + yPos > self.minimumHeight():
+                h += yPos
+                self._mpos.setY(pos.y())
+        elif self.Direction == Left:  # 左边
+            if w - xPos > self.minimumWidth():
+                x += xPos
+                w -= xPos
+            else:
+                return
+        elif self.Direction == Right:  # 右边
+            if w + xPos > self.minimumWidth():
+                w += xPos
+                self._mpos = pos
+            else:
+                return
+        elif self.Direction == Top:  # 上面
+            if h - yPos > self.minimumHeight():
+                y += yPos
+                h -= yPos
+            else:
+                return
+        elif self.Direction == Bottom:  # 下面
+            if h + yPos > self.minimumHeight():
+                h += yPos
+                self._mpos = pos
+            else:
+                return
+        self.setGeometry(x, y, w, h)
+    
+    def setZmText(self):
+        super(DesktopWidget, self).setText()
+
+
+class Custom(QWidget):
+    def paintEvent(self,event):
+        #初始化绘图工具
+        qp=QPainter()
+        #开始在窗口绘制
+        qp.begin(self)
+        #自定义画点方法
+        self.drawPoints(qp)
+        #结束在窗口的绘制
+        qp.end()
+
+    def drawPoints(self,qp):
+        qp.setPen(Qt.red)
+        size=self.size()
+
+        for i in range(1000):
+            #绘制郑玄函数图像，它的周期是【-100,100】
+            x=100*(-1+2.0*i/1000)+size.width()/2.0
+            y=-50*math.sin((x-size.width()/2.0)*math.pi/50)+size.height()/2.0
+
+            qp.drawPoint(x,y)
+
+
+class DisplayWidget(QWidget):
+    text_show='777'
+
+    def __init__(self, *args, **kwargs):
+        super(DisplayWidget, self).__init__(*args, **kwargs)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        layout = QVBoxLayout(self, spacing=0)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # self.left =Custom()
+        # self.left.setHtml('今天天气真好')
+        # self.right = QTextBrowser()
+        # self.right.setText("tommadsadasdad")
+        # splitter = QSplitter(Qt.Horizontal)
+        # splitter.addWidget(self.left)
+        # splitter.addWidget(self.right)
+    def paintEvent(self,event):
+        painter=QPainter()
+        painter.begin(self)
+        #自定义绘制方法
+        # self.drawText(event,painter)
+        self.myDrawText(event,painter,text=self.text_show)
+        painter.end()
+
+    def drawText(self,event,qp):
+        # print(event.rect().x())
+        f = QFont('SimSun',50)
+        # f.
+        qp.setFont(f)
+        qp.setPen(QColor(0,0,0))
+        qp.drawText(100,105,'今天风和日丽'*3)
+        #设置画笔的颜色
+        qp.setPen(QColor(83,180,105))
+        #设置字体
+        #绘制文字
+        a = qp.drawText(101,106,'今天风和日丽'*2)
+        print(a)
+        # print(a.width)
+        qp.setPen(QColor(177,177,177))
+        qp.drawText(101,106,'今天风和日丽')
+
+    def myDrawText(self,event,qp,text="666",font=QFont('霞鹜文楷 CN Regular',30),color=QColor(0,0,0)):
+        qp.setFont(font)
+        qp.setPen(color)
+        qp.drawText(100,105,text)
+    
+    def setText(self,text):
+        self.text_show=text
+        self.update()
+
+
   
 
 # 异步音频数据生成器，用于生成音频数据块作为NumPy数组。  
@@ -168,7 +403,6 @@ async def inputstream_generator(channels=1):
             indata, status = await q_in.get()  
             # 产出音频数据和状态  
             yield indata, status  
-
 
 
 #异步接收来自WebSocket客户端的消息，直到接收到"Done!"为止。
@@ -291,7 +525,7 @@ async def analyse_response_json(response_json : str):
             if json_data['is_final']==True:
                 print(json_data['text'])
             txtrn=insert_newlines1(json_data['text'],30)
-            window.text_label.setText(txtrn)
+            mainDisplayweight.setText(txtrn)
 
 async def run(  
     server_addr: str,  # WebSocket服务器的地址  
@@ -327,7 +561,6 @@ async def run(
         print(f"\最终的结果:\n{decoding_results}")
 
 
-
 async def main():
 
     server_addr = "127.0.0.1"
@@ -361,18 +594,30 @@ if __name__ == "__main__":
     global m
     # m = pycorrector.Corrector()
     # print(m.correct_batch(['少先队员因该为老人让坐', '你找到你最喜欢的工作，我也很高心。']))
-    global window
-    app = QApplication(sys.argv)  
-    window = TransparentWindow()  
-    window.show()
+    global mainWnd
+    
+    QssFilePath='./Voice_assistant/main.qss'
+    app = QApplication(sys.argv)
+    # 检测文件编码
+    with open(QssFilePath, 'rb') as f:
+        raw_data = f.read()
+        result = chardet.detect(raw_data)
+        encoding = result['encoding']
+    with open(QssFilePath,'r',encoding=encoding) as f:
+        qss = f.read()
+    
+    global mainDisplayweight
+    
 
-    # 在此运行了异步的main
-    # try:
-    #     asyncio.run(main())
-    # except KeyboardInterrupt:
-    #     print("\n按下 Ctrl + C 来退出")
-
+    app.setStyleSheet(qss)
+    mainWnd = DesktopWidget()
+    mainWnd.setWindowTitle('测试标题栏')
+    mainWnd.setWindowIcon(QIcon('Qt.ico'))
+    mainWnd.resize(QSize(1250,780))
+    mainDisplayweight=DisplayWidget(mainWnd)
+    mainWnd.setWidget(mainDisplayweight)  # 把自己的窗口添加进来
+    mainWnd.show()
+    
     sys.exit(app.exec_())
-
 
 
