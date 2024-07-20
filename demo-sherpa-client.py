@@ -301,7 +301,7 @@ class Custom(QWidget):
 
 
 class DisplayWidget(QWidget):
-    text_show='777'
+    text_show=['777','888']
 
     def __init__(self, *args, **kwargs):
         super(DisplayWidget, self).__init__(*args, **kwargs)
@@ -321,7 +321,7 @@ class DisplayWidget(QWidget):
         painter.begin(self)
         #自定义绘制方法
         # self.drawText(event,painter)
-        self.myDrawText(event,painter,text=self.text_show)
+        self.myDrawText(event,painter,textLines=self.text_show)
         painter.end()
 
     def drawText(self,event,qp):
@@ -341,13 +341,18 @@ class DisplayWidget(QWidget):
         qp.setPen(QColor(177,177,177))
         qp.drawText(101,106,'今天风和日丽')
 
-    def myDrawText(self,event,qp,text="666",font=QFont('霞鹜文楷 CN Regular',30),color=QColor(0,0,0)):
+    def myDrawText(self,event,qp,textLines=["666"],font=QFont('霞鹜文楷 CN Regular',30),color=QColor(0,0,0)):
         qp.setFont(font)
         qp.setPen(color)
-        qp.drawText(100,105,text)
+        font_size=30
+        cnt=0
+        for text in textLines:
+            qp.drawText(100,105+cnt*font_size,text)
+            cnt= cnt+1
     
     def setText(self,text):
-        self.text_show=text
+        self.text_show= text.split('\n')
+
         self.update()
 
 
